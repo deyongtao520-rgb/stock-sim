@@ -111,6 +111,34 @@ python tools/serve.py --open       # 自动打开浏览器
 
 > ⚠️ **别用 `python -m http.server`。** 标准库是单线程的，一次只处理一个请求；浏览器会并发拉取 12 个 JS 文件，单线程下请求被排队甚至超时，表现为随机几个脚本加载失败、页面卡在"正在加载真实行情数据…"。`serve.py` 用 `ThreadingHTTPServer` 已解决。
 
+### 手机 / 平板访问（同一 Wi-Fi）
+
+```bash
+# 1) 以局域网模式启动服务
+python tools/serve.py --lan
+
+# 2) 另开一个终端，生成扫码页（会自动探测局域网 IP）
+pip install segno
+python tools/lan_qr.py --open
+```
+
+`--lan` 等价于 `--host 0.0.0.0`，启动横幅会直接打印形如 `http://192.168.1.23:8321/` 的手机地址；`lan_qr.py` 则生成一份自包含的 `lan-access.html`（二维码内联为 SVG，不联网也能用），用微信「扫一扫」即可打开。
+
+**打不开的排查顺序：**
+
+1. **电脑上的服务窗口是否还开着** —— 关掉窗口服务就停了。
+2. **手机是否连着同一个 Wi-Fi** —— 用了移动数据或另一个 Wi-Fi 都不行。
+3. **AP 隔离** —— 部分公司/校园网禁止设备互访。改用手机热点让电脑连上来，再重跑一次 `lan_qr.py`。
+4. **Windows 防火墙** —— 以管理员身份执行（端口号按实际替换）：
+
+   ```cmd
+   netsh advfirewall firewall add rule name="股海练兵-8321" dir=in action=allow protocol=TCP localport=8321 remoteip=localsubnet
+   ```
+
+   规则中的 `remoteip=localsubnet` 限定只允许局域网设备访问，不会把端口暴露到公网。
+
+> 换 Wi-Fi 或重启路由器后局域网 IP 会变，重新运行 `python tools/lan_qr.py` 刷新扫码页即可。
+
 ### 方式二：直接双击 `app/index.html`
 
 无需服务器、无需构建、无需联网。所有资源通过 `<script src>` 同步加载，不含任何 `fetch`/`XHR`，因此不受 `file://` 的 CORS 限制。

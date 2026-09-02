@@ -11,12 +11,20 @@ serve.py —— 启动本地静态服务器（多线程）用于运行「股海�
     ThreadingHTTPServer 为每个请求开一个线程，可正确处理并发。
 
 用法：
-    python tools/serve.py                 # 默认 http://127.0.0.1:8321/
-    python tools/serve.py --port 9000
+    python tools/serve.py                 # 默认 http://127.0.0.1:8321/（仅本机）
+    python tools/serve.py --lan           # 局域网模式，手机/平板可通过 Wi-Fi 访问
+    python tools/serve.py --lan --port 9000
     python tools/serve.py --dir ./app --open
+
+局域网模式说明：
+    --lan 等价于 --host 0.0.0.0（监听所有网卡），并在横幅打印所有可访问的
+    局域网地址。手机需与电脑连接**同一个 Wi-Fi**，在浏览器（含微信内置浏览器）
+    输入形如 http://192.168.1.23:8321/ 的地址即可。
+    若被防火墙拦截，需在 Windows 防火墙放行该端口的入站连接。
 """
 import argparse
 import os
+import socket
 import sys
 import threading
 import webbrowser
@@ -44,10 +52,15 @@ class Handler(SimpleHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description='股海练兵 本地静态服务器')
     ap.add_argument('--port', type=int, default=8321, help='监听端口，默认 8321')
-    ap.add_argument('--host', default='127.0.0.1', help='监听地址，默认 127.0.0.1')
+    ap.add_argument('--host', default=None,
+                    help='监听地址，默认 127.0.0.1；加 --lan 则为 0.0.0.0')
+    ap.add_argument('--lan', action='store_true',
+                    help='局域网模式：监听所有网卡并打印可被手机访问的地址')
     ap.add_argument('--dir', default=DEFAULT_ROOT, help='静态根目录，默认项目 app/')
     ap.add_argument('--open', action='store_true', help='启动后自动打开浏览器')
     args = ap.parse_args()
+
+    host = args.host or ('0.0.0.0' if args.lan else '127.0.0.1')
 
     root = os.path.abspath(args.dir)
     if not os.path.isdir(root):
@@ -62,19 +75,27 @@ def main():
     ThreadingHTTPServer.allow_reuse_address = True
 
     try:
-        httpd = ThreadingHTTPServer((args.host, args.port), handler)
+        httpd = ThreadingHTTPServer((host, args.port), handler)
     except OSError as e:
-        sys.stderr.write('错误：无法监听 %s:%s —— %s\n' % (args.host, args.port, e))
+        sys.stderr.write('错误：无法监听 %s:%s —— %s\n' % (host, args.port, e))
         sys.stderr.write('请换一个端口，例如：python tools/serve.py --port 9000\n')
         return 1
 
-    url = 'http://%s:%d/' % (args.host, args.port)
+    lan_ips = _lan_addresses() if host in ('0.0.0.0', '::') else []
+    display_host = '127.0.0.1' if host in ('0.0.0.0', '::') else host
+    url = 'http://%s:%d/' % (display_host, args.port)
     print('=' * 62)
     print('  股海练兵 · 股票模拟交易与复盘')
     print('=' * 62)
     print('  服务目录 : %s' % root)
-    print('  访问地址 : %s' % url)
+    print('  本机访问 : %s' % url)
     print('  行情数据 : %d 个交易日' % _trading_days(root))
+    if lan_ips:
+        print('  ' + '-' * 58)
+        print('  手机访问（需与电脑连同一个 Wi-Fi）：')
+        for ip in lan_ips:
+            print('      http://%s:%d/' % (ip, args.port))
+        print('  打不开？多半是防火墙拦了入站连接，见 README「局域网访问」。')
     print('  停止服务 : Ctrl + C')
     print('=' * 62)
 
@@ -88,6 +109,61 @@ def main():
     finally:
         httpd.server_close()
     return 0
+
+
+def _lan_addresses():
+    """探测本机在局域网内的 IPv4 地址，用于手机访问。
+
+    两条探测路径合并去重：
+      1. UDP connect 到公网地址（不发实际数据包），拿到**出口网卡**的 IP；
+      2. 解析本机主机名，拿到**所有网卡**的 IP。
+    过滤回环地址，并按 192.168.x > 10.x > 172.16-31.x > 其他 排序，
+    把最可能是家用/办公 Wi-Fi 的地址排在最前。
+    """
+    found = set()
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('223.5.5.5', 80))  # 阿里 DNS，仅用于选路，不发包
+        found.add(s.getsockname()[0])
+        s.close()
+    except Exception:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.add(info[4][0])
+    except Exception:
+        pass
+
+    def is_private(ip):
+        try:
+            b = list(map(int, ip.split('.')))
+        except Exception:
+            return False
+        if b[0] == 127 or b[0] == 0:
+            return False
+        if b[0] == 169 and b[1] == 254:      # link-local，未拿到 DHCP
+            return False
+        if b[0] == 10:
+            return True
+        if b[0] == 192 and b[1] == 168:
+            return True
+        if b[0] == 172 and 16 <= b[1] <= 31:
+            return True
+        return False
+
+    def rank(ip):
+        b = list(map(int, ip.split('.')))
+        if b[0] == 192 and b[1] == 168:
+            return 0
+        if b[0] == 10:
+            return 1
+        if b[0] == 172:
+            return 2
+        return 3
+
+    return sorted((ip for ip in found if is_private(ip)), key=rank)
 
 
 def _trading_days(root):
